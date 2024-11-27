@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -71,26 +72,21 @@ class PlayerController extends ChangeNotifier {
 
   /// A stream to get current state of the player. This stream
   /// will emit event whenever there is change in the playerState.
-  Stream<PlayerState> get onPlayerStateChanged =>
-      PlatformStreams.instance.onPlayerStateChanged.filter(playerKey);
+  Stream<PlayerState> get onPlayerStateChanged => PlatformStreams.instance.onPlayerStateChanged.filter(playerKey);
 
   /// A stream to get current duration. This stream will emit
   /// every 200 milliseconds. Emitted duration is in milliseconds.
-  Stream<int> get onCurrentDurationChanged =>
-      PlatformStreams.instance.onDurationChanged.filter(playerKey);
+  Stream<int> get onCurrentDurationChanged => PlatformStreams.instance.onDurationChanged.filter(playerKey);
 
   /// A stream to get current extracted waveform data. This stream will emit
   /// list of doubles which are waveform data point.
-  Stream<List<double>> get onCurrentExtractedWaveformData =>
-      PlatformStreams.instance.onCurrentExtractedWaveformData.filter(playerKey);
+  Stream<List<double>> get onCurrentExtractedWaveformData => PlatformStreams.instance.onCurrentExtractedWaveformData.filter(playerKey);
 
   /// A stream to get current progress of waveform extraction.
-  Stream<double> get onExtractionProgress =>
-      PlatformStreams.instance.onExtractionProgress.filter(playerKey);
+  Stream<double> get onExtractionProgress => PlatformStreams.instance.onExtractionProgress.filter(playerKey);
 
   /// A stream to get events when audio is finished playing.
-  Stream<void> get onCompletion =>
-      PlatformStreams.instance.onCompletion.filter(playerKey);
+  Stream<void> get onCompletion => PlatformStreams.instance.onCompletion.filter(playerKey);
 
   PlayerController() {
     if (!PlatformStreams.instance.isInitialised) {
@@ -101,8 +97,7 @@ class PlayerController extends ChangeNotifier {
 
   void _setPlayerState(PlayerState state) {
     _playerState = state;
-    PlatformStreams.instance
-        .addPlayerStateEvent(PlayerIdentifier(playerKey, state));
+    PlatformStreams.instance.addPlayerStateEvent(PlayerIdentifier(playerKey, state));
   }
 
   /// Calls platform to prepare player.
@@ -183,12 +178,30 @@ class PlayerController extends ChangeNotifier {
     required String path,
     int noOfSamples = 100,
   }) async {
-    final result = await AudioWaveformsInterface.instance.extractWaveformData(
-      key: playerKey,
-      path: path,
-      noOfSamples: noOfSamples,
+    final receivePort = ReceivePort();
+
+    await Isolate.spawn(
+      _isolateHandler,
+      _IsolateMessage(
+        path: path,
+        noOfSamples: noOfSamples,
+        sendPort: receivePort.sendPort,
+        playerKey: playerKey,
+      ),
     );
+
+    final result = await receivePort.first as List<double>;
     return result;
+  }
+
+  static Future<void> _isolateHandler(_IsolateMessage message) async {
+    final extractedData = await AudioWaveformsInterface.instance.extractWaveformData(
+      key: message.playerKey,
+      path: message.path,
+      noOfSamples: message.noOfSamples,
+    );
+
+    message.sendPort.send(extractedData);
   }
 
   /// A function to start the player to play/resume the audio.
@@ -202,10 +215,8 @@ class PlayerController extends ChangeNotifier {
     FinishMode finishMode = FinishMode.stop,
     bool forceRefresh = true,
   }) async {
-    if (_playerState == PlayerState.initialized ||
-        _playerState == PlayerState.paused) {
-      final isStarted = await AudioWaveformsInterface.instance
-          .startPlayer(playerKey, finishMode);
+    if (_playerState == PlayerState.initialized || _playerState == PlayerState.paused) {
+      final isStarted = await AudioWaveformsInterface.instance.startPlayer(playerKey, finishMode);
       if (isStarted) {
         _setPlayerState(PlayerState.playing);
       } else {
@@ -218,8 +229,7 @@ class PlayerController extends ChangeNotifier {
 
   /// Pauses currently playing audio.
   Future<void> pausePlayer() async {
-    final isPaused =
-        await AudioWaveformsInterface.instance.pausePlayer(playerKey);
+    final isPaused = await AudioWaveformsInterface.instance.pausePlayer(playerKey);
     if (isPaused) {
       _setPlayerState(PlayerState.paused);
     }
@@ -228,8 +238,7 @@ class PlayerController extends ChangeNotifier {
 
   /// A function to stop player. After calling this.
   Future<void> stopPlayer() async {
-    final isStopped =
-        await AudioWaveformsInterface.instance.stopPlayer(playerKey);
+    final isStopped = await AudioWaveformsInterface.instance.stopPlayer(playerKey);
     if (isStopped) {
       _setPlayerState(PlayerState.stopped);
     }
@@ -249,8 +258,7 @@ class PlayerController extends ChangeNotifier {
   ///
   /// Default to 1.0
   Future<bool> setVolume(double volume) async {
-    final result =
-        await AudioWaveformsInterface.instance.setVolume(volume, playerKey);
+    final result = await AudioWaveformsInterface.instance.setVolume(volume, playerKey);
     return result;
   }
 
@@ -259,8 +267,7 @@ class PlayerController extends ChangeNotifier {
   ///
   /// Default to 1.0
   Future<bool> setRate(double rate) async {
-    final result =
-        await AudioWaveformsInterface.instance.setRate(rate, playerKey);
+    final result = await AudioWaveformsInterface.instance.setRate(rate, playerKey);
     return result;
   }
 
@@ -271,8 +278,7 @@ class PlayerController extends ChangeNotifier {
   ///
   /// Default to Duration.max.
   Future<int> getDuration([DurationType? durationType]) async {
-    final duration = await AudioWaveformsInterface.instance
-        .getDuration(playerKey, durationType?.index ?? 1);
+    final duration = await AudioWaveformsInterface.instance.getDuration(playerKey, durationType?.index ?? 1);
     return duration ?? -1;
   }
 
@@ -338,4 +344,19 @@ class PlayerController extends ChangeNotifier {
 
   @override
   int get hashCode => super.hashCode; //ignore: unnecessary_overrides
+}
+
+/// Data structure to pass data to the isolate
+class _IsolateMessage {
+  final String path;
+  final int noOfSamples;
+  final SendPort sendPort;
+  final String playerKey;
+
+  _IsolateMessage({
+    required this.path,
+    required this.noOfSamples,
+    required this.sendPort,
+    required this.playerKey,
+  });
 }
