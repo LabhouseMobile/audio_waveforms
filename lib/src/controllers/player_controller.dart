@@ -179,10 +179,12 @@ class PlayerController extends ChangeNotifier {
     int noOfSamples = 100,
   }) async {
     final receivePort = ReceivePort();
+    var rootToken = RootIsolateToken.instance!;
 
     await Isolate.spawn(
       _isolateHandler,
       _IsolateMessage(
+        token: rootToken,
         path: path,
         noOfSamples: noOfSamples,
         sendPort: receivePort.sendPort,
@@ -195,6 +197,7 @@ class PlayerController extends ChangeNotifier {
   }
 
   static Future<void> _isolateHandler(_IsolateMessage message) async {
+    BackgroundIsolateBinaryMessenger.ensureInitialized(message.token);
     final extractedData = await AudioWaveformsInterface.instance.extractWaveformData(
       key: message.playerKey,
       path: message.path,
@@ -348,12 +351,14 @@ class PlayerController extends ChangeNotifier {
 
 /// Data structure to pass data to the isolate
 class _IsolateMessage {
+  final RootIsolateToken token;
   final String path;
   final int noOfSamples;
   final SendPort sendPort;
   final String playerKey;
 
   _IsolateMessage({
+    required this.token,
     required this.path,
     required this.noOfSamples,
     required this.sendPort,
